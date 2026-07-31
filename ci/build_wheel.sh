@@ -1,54 +1,99 @@
 #!/bin/bash
-# Copyright (c) 2023-2024, NVIDIA CORPORATION.
+# SPDX-FileCopyrightText: Copyright (c) 2023-2026, NVIDIA CORPORATION.
+# SPDX-License-Identifier: Apache-2.0
 
 set -euo pipefail
 
 package_name=$1
 package_dir=$2
-underscore_package_name=$(echo "${package_name}" | tr "-" "_")
+shift 2
+
+# Parse optional flags
+stable_abi=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --stable)
+      stable_abi=true
+      shift
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      exit 1
+      ;;
+  esac
+done
 
 source rapids-configure-sccache
 source rapids-date-string
+source rapids-init-pip
 
-version=$(rapids-generate-version)
-git_commit=$(git rev-parse HEAD)
+export SCCACHE_S3_PREPROCESSOR_CACHE_KEY_PREFIX="${package_name}/${RAPIDS_CONDA_ARCH}/cuda${RAPIDS_CUDA_VERSION%%.*}/wheel/preprocessor-cache"
+export SCCACHE_S3_USE_PREPROCESSOR_CACHE_MODE=true
 
-RAPIDS_PY_CUDA_SUFFIX="$(rapids-wheel-ctk-name-gen ${RAPIDS_CUDA_VERSION})"
-
-# This is the version of the suffix with a preceding hyphen. It's used
-# everywhere except in the final wheel name.
-PACKAGE_CUDA_SUFFIX="-${RAPIDS_PY_CUDA_SUFFIX}"
-
-# Patch project metadata files to include the CUDA version suffix and version override.
-pyproject_file="${package_dir}/pyproject.toml"
-version_file="${package_dir}/${underscore_package_name}/_version.py"
-
-sed -i "s/name = \"${package_name}\"/name = \"${package_name}${PACKAGE_CUDA_SUFFIX}\"/g" ${pyproject_file}
-echo "${version}" > VERSION
-sed -i "/^__git_commit__ / s/= .*/= \"${git_commit}\"/g" ${version_file}
-
-# For nightlies we want to ensure that we're pulling in alphas as well. The
-# easiest way to do so is to augment the spec with a constraint containing a
-# min alpha version that doesn't affect the version bounds but does allow usage
-# of alpha versions for that dependency without --pre
-alpha_spec=''
-if ! rapids-is-release-build; then
-    alpha_spec=',>=0.0.0a0'
-fi
-
-sed -r -i "s/rmm(.*)\"/rmm${PACKAGE_CUDA_SUFFIX}\1${alpha_spec}\"/g" ${pyproject_file}
-
-if [[ $PACKAGE_CUDA_SUFFIX == "-cu12" ]]; then
-    sed -i "s/cuda-python[<=>\.,0-9a]*/cuda-python>=12.0,<13.0a0/g" ${pyproject_file}
-    sed -i "s/cupy-cuda11x/cupy-cuda12x/g" ${pyproject_file}
-fi
+rapids-generate-version > ./VERSION
 
 cd "${package_dir}"
 
-# Hardcode the output dir
-python -m pip wheel . -w dist -vvv --no-deps --disable-pip-version-check
+EXCLUDE_ARGS=(
+  --exclude "libcublas.so.*"
+  --exclude "libcublasLt.so.*"
+  --exclude "libcurand.so.*"
+  --exclude "libcusolver.so.*"
+  --exclude "libcusparse.so.*"
+  --exclude "libnccl.so.*"
+  --exclude "libnvJitLink.so.*"
+  --exclude "libnvrtc.so.*"
+  --exclude "libraft.so"
+  --exclude "librapids_logger.so"
+  --exclude "librmm.so"
+)
 
-mkdir -p final_dist
-python -m auditwheel repair -w final_dist dist/*
+if [[ "${package_dir}" != "python/libcuvs" ]]; then
+    EXCLUDE_ARGS+=(
+      --exclude "libcuvs_c.so"
+      --exclude "libcuvs.so"
+    )
+fi
 
-RAPIDS_PY_WHEEL_NAME="${underscore_package_name}_${RAPIDS_PY_CUDA_SUFFIX}" rapids-upload-wheels-to-s3 final_dist
+SKBUILD_CMAKE_ARGS="-DUSE_NCCL_RUNTIME_WHEEL=ON"
+export SKBUILD_CMAKE_ARGS
+
+rapids-print-env
+
+rapids-logger "Building '${package_name}' wheel"
+
+sccache --stop-server 2>/dev/null || true
+
+RAPIDS_PIP_WHEEL_ARGS=(
+  -w dist
+  -v
+  --no-deps
+  --disable-pip-version-check
+)
+
+# Add py-api setting for stable ABI builds
+if [[ "${stable_abi}" == "true" ]] && [[ -n "${RAPIDS_PY_API:-}" ]]; then
+  RAPIDS_PIP_WHEEL_ARGS+=(--config-settings="skbuild.wheel.py-api=${RAPIDS_PY_API}")
+fi
+
+# Only use --build-constraint when build isolation is enabled.
+#
+# Passing '--build-constraint' and '--no-build-isolation` together results in an error from 'pip',
+# but we want to keep environment variable PIP_CONSTRAINT set unconditionally.
+# PIP_NO_BUILD_ISOLATION=0 means "add --no-build-isolation" (ref: https://github.com/pypa/pip/issues/5735)
+if [[ "${PIP_NO_BUILD_ISOLATION:-}" != "0" ]]; then
+    RAPIDS_PIP_WHEEL_ARGS+=(--build-constraint="${PIP_CONSTRAINT}")
+fi
+
+# unset PIP_CONSTRAINT (set by rapids-init-pip)... it doesn't affect builds as of pip 25.3, and
+# results in an error from 'pip wheel' when set and --build-constraint is also passed
+unset PIP_CONSTRAINT
+rapids-pip-retry wheel \
+    "${RAPIDS_PIP_WHEEL_ARGS[@]}" \
+    .
+
+sccache --show-adv-stats
+sccache --stop-server >/dev/null 2>&1 || true
+
+# repair wheels and write to the location that artifact-uploading code expects to find them
+python -m auditwheel repair -w "${RAPIDS_WHEEL_BLD_OUTPUT_DIR}" "${EXCLUDE_ARGS[@]}" dist/*

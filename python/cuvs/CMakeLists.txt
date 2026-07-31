@@ -1,22 +1,13 @@
 # =============================================================================
-# Copyright (c) 2022-2024, NVIDIA CORPORATION.
-#
-# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
-# in compliance with the License. You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software distributed under the License
-# is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
-# or implied. See the License for the specific language governing permissions and limitations under
-# the License.
+# cmake-format: off
+# SPDX-FileCopyrightText: Copyright (c) 2022-2026, NVIDIA CORPORATION.
+# SPDX-License-Identifier: Apache-2.0
+# cmake-format: on
 # =============================================================================
 
-cmake_minimum_required(VERSION 3.26.4 FATAL_ERROR)
+cmake_minimum_required(VERSION 4.0 FATAL_ERROR)
 
-include(../../fetch_rapids.cmake)
-
-set(cuvs_version 24.02.00)
+include(../../cmake/rapids_config.cmake)
 
 # We always need CUDA for cuvs because the cuvs dependency brings in a header-only cuco dependency
 # that enables CUDA unconditionally.
@@ -25,7 +16,7 @@ rapids_cuda_init_architectures(cuvs_py)
 
 project(
   cuvs_py
-  VERSION ${cuvs_version}
+  VERSION "${RAPIDS_VERSION}"
   LANGUAGES # TODO: Building Python extension modules via the python_extension_module requires the C
             # language to be enabled here. The test project that is built in scikit-build to verify
             # various linking options for the python library is hardcoded to build with C, so until
@@ -33,33 +24,33 @@ project(
             C CXX CUDA
 )
 
-option(FIND_CUVS_CPP "Search for existing CUVS C++ installations before defaulting to local files"
-       OFF
-)
+# ##################################################################################################
+# * Process User Options  ------------------------------------------------------
 
-# If the user requested it we attempt to find CUVS.
-if(FIND_CUVS_CPP)
-  find_package(cuvs ${cuvs_version})
-else()
-  set(cuvs_FOUND OFF)
-endif()
+include(rapids-cmake)
+include(rapids-cpm)
+include(rapids-cython-core)
+include(rapids-export)
+include(rapids-find)
 
-include(rapids-cython)
+rapids_cpm_init()
 
-if(NOT cuvs_FOUND)
-  set(BUILD_TESTS OFF)
-  set(CUDA_STATIC_RUNTIME ON)
+# --- cuVS ---#
+find_package(cuvs "${RAPIDS_VERSION}" REQUIRED COMPONENTS cuvs_cpp_headers cuvs cuvs_shared c_api)
 
-  add_subdirectory(../../cpp cuvs-cpp EXCLUDE_FROM_ALL)
+# --- dlpack ---#
+include(../../cpp/cmake/thirdparty/get_dlpack.cmake)
 
-  # When building the C++ libraries from source we must copy libcuvs.so alongside the Cython
-  # libraries TODO: when we have a single 'compiled' cuvs library, we shouldn't need this
-  set(cython_lib_dir cuvs_py)
-  install(TARGETS cuvs DESTINATION ${cython_lib_dir})
-endif()
+# ensure Cython targets can find dlpack headers (these do not come installed with with cuVS)
+target_include_directories(cuvs::cuvs INTERFACE "$<BUILD_INTERFACE:${DLPACK_INCLUDE_DIR}>")
+
+# ##################################################################################################
+# * Build Cython artifacts -----------------------------------------------------
 
 rapids_cython_init()
 
-if(DEFINED cython_lib_dir)
-  rapids_cython_add_rpath_entries(TARGET cuvs PATHS "${cython_lib_dir}")
-endif()
+add_subdirectory(cuvs/common)
+add_subdirectory(cuvs/cluster)
+add_subdirectory(cuvs/distance)
+add_subdirectory(cuvs/neighbors)
+add_subdirectory(cuvs/preprocessing)

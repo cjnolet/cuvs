@@ -1,18 +1,30 @@
 #!/bin/bash
-# Copyright (c) 2023, NVIDIA CORPORATION.
+# SPDX-FileCopyrightText: Copyright (c) 2023-2026, NVIDIA CORPORATION.
+# SPDX-License-Identifier: Apache-2.0
 
 set -euo pipefail
 
-mkdir -p ./dist
-RAPIDS_PY_CUDA_SUFFIX="$(rapids-wheel-ctk-name-gen ${RAPIDS_CUDA_VERSION})"
-RAPIDS_PY_WHEEL_NAME="cuvs_${RAPIDS_PY_CUDA_SUFFIX}" rapids-download-wheels-from-s3 ./dist
+source rapids-init-pip
 
-# echo to expand wildcard before adding `[extra]` requires for pip
-python -m pip install $(echo ./dist/cuvs*.whl)[test]
+# Delete system libnccl.so to ensure the wheel is used
+rm -rf /usr/lib64/libnccl*
 
-# Run smoke tests for aarch64 pull requests
-if [[ "$(arch)" == "aarch64" && "${RAPIDS_BUILD_TYPE}" == "pull-request" ]]; then
-    python ./ci/wheel_smoke_test_cuvs.py
-else
-    python -m pytest ./python/cuvs/cuvs/test
-fi
+LIBCUVS_WHEELHOUSE=$(rapids-download-from-github "$(rapids-artifact-name wheel_cpp libcuvs cuvs --cuda "$RAPIDS_CUDA_VERSION")")
+CUVS_WHEELHOUSE=$(rapids-download-from-github "$(rapids-artifact-name wheel_python cuvs cuvs --stable --cuda "$RAPIDS_CUDA_VERSION")")
+
+# generate constraints (possibly pinning to oldest support versions of dependencies)
+rapids-generate-pip-constraints test_python "${PIP_CONSTRAINT}"
+
+# notes:
+#
+#   * echo to expand wildcard before adding `[test]` requires for pip
+#   * just providing --constraint="${PIP_CONSTRAINT}" to be explicit, and because
+#     that environment variable is ignored if any other --constraint are passed via the CLI
+#
+rapids-pip-retry install \
+    --prefer-binary \
+    --constraint "${PIP_CONSTRAINT}" \
+    "${LIBCUVS_WHEELHOUSE}"/libcuvs*.whl \
+    "$(echo "${CUVS_WHEELHOUSE}"/cuvs*.whl)[test]"
+
+python -m pytest ./python/cuvs/cuvs/tests

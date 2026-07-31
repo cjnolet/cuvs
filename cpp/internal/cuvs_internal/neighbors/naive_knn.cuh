@@ -1,22 +1,11 @@
 /*
- * Copyright (c) 2023, NVIDIA CORPORATION.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-FileCopyrightText: Copyright (c) 2023-2026, NVIDIA CORPORATION.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #pragma once
 
-#include <cuvs/distance/distance_types.hpp>
+#include <cuvs/distance/distance.hpp>
 #include <cuvs/spatial/knn/detail/ann_utils.cuh>
 #include <raft/matrix/detail/select_k.cuh>
 #include <raft/util/cuda_utils.cuh>
@@ -24,7 +13,8 @@
 #include <raft/core/resource/cuda_stream.hpp>
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/device_uvector.hpp>
-#include <rmm/mr/device/device_memory_resource.hpp>
+#include <rmm/mr/per_device_resource.hpp>
+#include <rmm/resource_ref.hpp>
 
 namespace cuvs::neighbors {
 
@@ -45,18 +35,26 @@ RAFT_KERNEL naive_distance_kernel(EvalT* dist,
     for (IdxT i = 0; i < k; ++i) {
       IdxT xidx = i + midx * k;
       IdxT yidx = i + nidx * k;
-      auto xv   = EvalT(x[xidx]);
-      auto yv   = EvalT(y[yidx]);
+      auto xv   = x[xidx];
+      auto yv   = y[yidx];
       switch (metric) {
         case cuvs::distance::DistanceType::InnerProduct: {
-          acc += xv * yv;
+          acc += static_cast<EvalT>(xv) * static_cast<EvalT>(yv);
+        } break;
+        case cuvs::distance::DistanceType::CosineExpanded: {
+          acc += static_cast<EvalT>(xv) * static_cast<EvalT>(yv);
         } break;
         case cuvs::distance::DistanceType::L2SqrtExpanded:
         case cuvs::distance::DistanceType::L2SqrtUnexpanded:
         case cuvs::distance::DistanceType::L2Expanded:
         case cuvs::distance::DistanceType::L2Unexpanded: {
-          auto diff = xv - yv;
+          auto diff = static_cast<EvalT>(xv) - static_cast<EvalT>(yv);
           acc += diff * diff;
+        } break;
+        case cuvs::distance::DistanceType::BitwiseHamming: {
+          if constexpr (std::is_same_v<uint8_t, DataT>) {
+            acc += __popc(static_cast<uint32_t>(xv ^ yv) & 0xff);
+          }
         } break;
         default: break;
       }
@@ -90,8 +88,7 @@ void naive_knn(raft::resources const& handle,
                uint32_t k,
                cuvs::distance::DistanceType type)
 {
-  rmm::mr::device_memory_resource* mr = nullptr;
-  auto pool_guard                     = raft::get_pool_memory_resource(mr, 1024 * 1024);
+  rmm::device_async_resource_ref mr = rmm::mr::get_current_device_resource_ref();
 
   auto stream = raft::resource::get_cuda_stream(handle);
   dim3 block_dim(16, 32, 1);
@@ -119,8 +116,7 @@ void naive_knn(raft::resources const& handle,
                                           static_cast<int>(k),
                                           dist_topk + offset * k,
                                           indices_topk + offset * k,
-                                          type != cuvs::distance::DistanceType::InnerProduct,
-                                          mr);
+                                          type != cuvs::distance::DistanceType::InnerProduct);
   }
   RAFT_CUDA_TRY(cudaStreamSynchronize(stream));
 }

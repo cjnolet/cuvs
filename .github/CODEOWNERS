@@ -1,21 +1,48 @@
+#c code owners
+c/                 @NVIDIA/cuvs-c-codeowners
+examples/c/        @NVIDIA/cuvs-c-codeowners
+
 #cpp code owners
-cpp/               @rapidsai/cuvs-cpp-codeowners
+cpp/               @NVIDIA/cuvs-cpp-codeowners
+examples/cpp/      @NVIDIA/cuvs-cpp-codeowners
+
+
+#java code owners
+java/              @NVIDIA/cuvs-java-codeowners
+examples/java/     @NVIDIA/cuvs-java-codeowners
 
 #python code owners
-python/            @rapidsai/cuvs-python-codeowners
+python/            @NVIDIA/cuvs-python-codeowners
+
+#rust code owners
+rust/              @NVIDIA/cuvs-rust-codeowners
+
+#docs code owners
+docs/              @NVIDIA/cuvs-docs-codeowners
+fern/              @NVIDIA/cuvs-docs-codeowners
 
 #cmake code owners
-**/CMakeLists.txt  @rapidsai/cuvs-cmake-codeowners
-**/cmake/          @rapidsai/cuvs-cmake-codeowners
-python/setup.py    @rapidsai/cuvs-cmake-codeowners
-build.sh           @rapidsai/cuvs-cmake-codeowners
-**/build.sh        @rapidsai/cuvs-cmake-codeowners
+CMakeLists.txt                  @NVIDIA/cuvs-cmake-codeowners
+**/cmake/                       @NVIDIA/cuvs-cmake-codeowners
+*.cmake                         @NVIDIA/cuvs-cmake-codeowners
+cpp/scripts/run-cmake-format.sh @NVIDIA/cuvs-cmake-codeowners
 
-#build/ops code owners
-.github/           @rapidsai/ops-codeowners
-ci/                @rapidsai/ops-codeowners
-conda/             @rapidsai/ops-codeowners
-**/Dockerfile      @rapidsai/ops-codeowners
-**/.dockerignore   @rapidsai/ops-codeowners
-docker/            @rapidsai/ops-codeowners
-dependencies.yaml  @rapidsai/ops-codeowners
+#CI code owners
+/.github/                @NVIDIA/adi-ci-codeowners
+/ci/                     @NVIDIA/adi-ci-codeowners
+/.shellcheckrc           @NVIDIA/adi-ci-codeowners
+/.coderabbit.yaml        @NVIDIA/adi-ci-codeowners
+
+#packaging code owners
+/.pre-commit-config.yaml @NVIDIA/adi-packaging-codeowners
+/.devcontainer/          @NVIDIA/adi-packaging-codeowners
+/conda/                  @NVIDIA/adi-packaging-codeowners
+dependencies.yaml        @NVIDIA/adi-packaging-codeowners
+/build.sh                @NVIDIA/adi-packaging-codeowners
+pyproject.toml           @NVIDIA/adi-packaging-codeowners
+python/setup.py          @NVIDIA/adi-packaging-codeowners
+build.sh                 @NVIDIA/adi-packaging-codeowners
+**/build.sh              @NVIDIA/adi-packaging-codeowners
+
+# Ops code owners
+/SECURITY.md             @NVIDIA/adi-ops-codeowners

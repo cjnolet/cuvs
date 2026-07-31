@@ -1,48 +1,65 @@
 #!/bin/bash
-# Copyright (c) 2023-2024, NVIDIA CORPORATION.
+# SPDX-FileCopyrightText: Copyright (c) 2023-2026, NVIDIA CORPORATION.
+# SPDX-License-Identifier: Apache-2.0
 
 set -euo pipefail
 
-rapids-logger "Create test conda environment"
+rapids-logger "Create docs conda environment"
 . /opt/conda/etc/profile.d/conda.sh
+
+rapids-logger "Configuring conda strict channel priority"
+conda config --set channel_priority strict
 
 rapids-dependency-file-generator \
   --output conda \
-  --file_key docs \
-  --matrix "cuda=${RAPIDS_CUDA_VERSION%.*};arch=$(arch);py=${RAPIDS_PY_VERSION}" | tee env.yaml
+  --file-key docs \
+  --matrix "cuda=${RAPIDS_CUDA_VERSION%.*};arch=$(arch);py=${RAPIDS_PY_VERSION}" \
+  | tee env.yaml
 
-rapids-mamba-retry env create --force -f env.yaml -n docs
+rapids-mamba-retry env create --yes -f env.yaml -n docs
+
+# seeing failures on activating the environment here on unbound locals
+# apply workaround from https://github.com/conda/conda/issues/8186#issuecomment-532874667
+set +eu
 conda activate docs
+set -eu
 
 rapids-print-env
 
-rapids-logger "Downloading artifacts from previous jobs"
-CPP_CHANNEL=$(rapids-download-conda-from-s3 cpp)
-PYTHON_CHANNEL=$(rapids-download-conda-from-s3 python)
+rapids-logger "Validate Fern docs"
 
-rapids-mamba-retry install \
-  --channel "${CPP_CHANNEL}" \
-  --channel "${PYTHON_CHANNEL}" \
-  libcuvs \
-  libcuvs-headers \
-  cuvs \
-  raft-dask
+find_pr_number() {
+  local ref
+  for ref in "${RAPIDS_REF_NAME:-}" "${GITHUB_REF:-}" "${GITHUB_REF_NAME:-}"; do
+    if [[ "${ref}" =~ (^|/)pull-request/([0-9]+)$ ]]; then
+      echo "${BASH_REMATCH[2]}"
+      return 0
+    fi
+    if [[ "${ref}" =~ ^refs/pull/([0-9]+)/ ]]; then
+      echo "${BASH_REMATCH[1]}"
+      return 0
+    fi
+    if [[ "${ref}" =~ ^([0-9]+)/merge$ ]]; then
+      echo "${BASH_REMATCH[1]}"
+      return 0
+    fi
+  done
+}
 
-export RAPIDS_VERSION_NUMBER="24.02"
-export RAPIDS_DOCS_DIR="$(mktemp -d)"
+FERN_DOCS_MODE="${FERN_DOCS_MODE:-check}"
+FERN_DOCS_ARGS=()
 
-rapids-logger "Build CPP docs"
-pushd cpp/doxygen
-doxygen Doxyfile
-popd
+if [[ "${FERN_DOCS_MODE}" == "preview" ]]; then
+  FERN_PREVIEW_ID="${FERN_DOCS_PREVIEW_ID:-}"
+  if [[ -z "${FERN_PREVIEW_ID}" ]]; then
+    PR_NUMBER="$(find_pr_number || true)"
+    if [[ -n "${PR_NUMBER}" ]]; then
+      FERN_PREVIEW_ID="pr-${PR_NUMBER}"
+    fi
+  fi
+  if [[ -n "${FERN_PREVIEW_ID}" ]]; then
+    FERN_DOCS_ARGS+=(--id "${FERN_PREVIEW_ID}")
+  fi
+fi
 
-rapids-logger "Build Python docs"
-pushd docs
-sphinx-build -b dirhtml source _html
-sphinx-build -b text source _text
-mkdir -p "${RAPIDS_DOCS_DIR}/cuvs/"{html,txt}
-mv _html/* "${RAPIDS_DOCS_DIR}/cuvs/html"
-mv _text/* "${RAPIDS_DOCS_DIR}/cuvs/txt"
-popd
-
-rapids-upload-docs
+fern/build_docs.sh "${FERN_DOCS_MODE}" "${FERN_DOCS_ARGS[@]}"
